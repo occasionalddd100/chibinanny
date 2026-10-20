@@ -44,4 +44,5 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .err:empty { display: none; }
 .log { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; margin-top: 4px; user-select: text; }
 .log .me { align-self: flex-end; background: #3a2f5c; padding: 4px 8px; border-radius: 10px 10px 2px 10px; max-width: 85%; }
+.log .act { align-self: stretch; color: var(--ok); font-size: 12px; padding: 0 4px; }
 .log .it { align-self: flex-start; background: #15111f; padding: 4px 8px; border-radius: 10px 10px 10px 2px; max-width: 90%; }

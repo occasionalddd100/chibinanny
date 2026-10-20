@@ -235,6 +235,7 @@ function quiet(d = new Date()) {
 function tick() {
   renderPill();
   if (mode === "login") return;
+  if (reminders()) return;
   const now = Date.now(), d = new Date();
   const asleep = now < pausedUntil || (quiet(d) && mode !== "focus");
   if (asleep) { if (mode !== "sleep" && mode !== "focus") { setMode("sleep"); if (bubble?.needsAnswer) close(); } return; }
@@ -411,32 +412,88 @@ function heavy() {
 // ---------- chat ----------
 function openChat() {
   const log = h("div", { cls: "log" });
-  const draw = () => log.replaceChildren(...chatLog.slice(-6).map(m => h("div", { cls: m.role === "user" ? "me" : "it" }, m.content)));
+  const draw = () => {
+    log.replaceChildren(...chatLog.slice(-8).map(m => h("div", { cls: m.act ? "act" : m.role === "user" ? "me" : "it" }, m.content)));
+    log.scrollTop = log.scrollHeight;
+  };
   draw();
   ask({
     kind: "chat", text: chatLog.length ? "" : "Слушаю. О чём?", extra: log,
     input: {
-      placeholder: "напиши…",
+      placeholder: "напиши… (добавь задачу, напомни в 6:15)",
       onSubmit: async (v, f) => {
         f.v.value = ""; chatLog.push({ role: "user", content: v }); draw();
         if (!S.llmKey && S.llmUrl.includes("openrouter")) { chatLog.push({ role: "assistant", content: "Чтобы болтать, вставь ключ OpenRouter в ⚙." }); return draw(); }
         const wait = { role: "assistant", content: "…" }; chatLog.push(wait); draw(); layout();
         try {
           await db.load().catch(() => {});
+          // numbered tasks the model may act on: the focus first, then the rest by urgency
+          const fl = db.focusOpen(), rest = db.open().filter(t => !fl.includes(t));
+          const list = [...fl, ...rest].slice(0, 30);
+          const cats = db.catList().slice(0, 40);
+          const d = new Date(), pad = n => String(n).padStart(2, "0");
           const ctx = {
-            now: new Date().toLocaleString("ru-RU", { weekday: "long", hour: "2-digit", minute: "2-digit" }),
+            now: d.toLocaleString("ru-RU", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }),
+            iso: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`,
             state: mode === "focus" ? `Марк делает «${focus.text}», осталось ${Math.round((focus.endsAt - Date.now()) / 60e3)} мин.` : softDay() ? "Сегодня Марку тяжело, мягкий режим." : "Марк сейчас без задачи.",
-            tasks: db.open().slice(0, 8).map(t => t.text + (t.due ? ` (срок ${t.due})` : "")).join("; "),
+            tasks: list.map((t, i) => `${i + 1}. ${t.text}` + [typeof t.focus === "number" && "в фокусе", t.due && "срок " + t.due + (t.time ? " " + t.time : ""), t.prio === "urgent" && "срочно"].filter(Boolean).map(x => ` [${x}]`).join("")).join("\n"),
+            cats: cats.map((c, i) => `k${i + 1}: ${c.label}`).join("\n"),
             done: db.doneToday().map(t => t.text).join("; "),
           };
-          wait.content = await chat(S, chatLog.filter(m => m !== wait), ctx);
+          const history = chatLog.filter(m => m !== wait).map(m => ({ role: m.role, content: m.content }));
+          const r = await chat(S, history, ctx);
+          wait.content = r.text || (r.actions.length ? "Сделано." : "…");
+          for (const a of r.actions) chatLog.push({ role: "assistant", act: true, content: await act(a, list, cats) });
         } catch (e) { wait.content = "Не смог ответить: " + (e.message || e); }
-        draw();
+        draw(); layout();
       },
     },
     buttons: [{ label: "Закрыть", cls: "ghost", fn: close }],
   });
   if (!chatLog.length) bubEl.querySelector(".say").textContent = "Слушаю. О чём?";
+}
+
+// one @command from the model; returns the line shown in the chat
+async function act(a, list, cats) {
+  const pick = () => { const t = list[(+a.task || 0) - 1]; if (!t) throw new Error("нет задачи №" + a.task); return t; };
+  try {
+    if (a.op === "add") {
+      if (!a.text) throw new Error("без текста");
+      const cat = /^k\d+$/.test(a.where || "") ? cats[+a.where.slice(1) - 1]?.id : undefined;
+      const t = await db.addTask(a.text, { cat, due: a.due, time: a.time, focus: a.focus });
+      const where = db.catList().find(c => c.id === t.cat)?.label || "";
+      return `✓ Задача «${short(t.text, 50)}»` + (t.due ? ` на ${t.due}${t.time ? " " + t.time : ""}` : "") + (t.focus ? ", в фокусе" : "") + (where ? ` → ${where}` : "");
+    }
+    if (a.op === "done") { const t = pick(); await db.done(t); setAnim("happy"); return `✓ Сделано: «${short(t.text, 50)}»`; }
+    if (a.op === "focus") { const t = pick(); await db.toFocus(t); return `✓ В фокус: «${short(t.text, 50)}»`; }
+    if (a.op === "unfocus") { const t = pick(); await db.unFocus(t); return `✓ Убрал из фокуса: «${short(t.text, 50)}»`; }
+    if (a.op === "remind") {
+      const at = new Date(a.at).getTime();
+      if (!at || isNaN(at)) throw new Error("непонятное время " + a.at);
+      remember({ reminders: [...(mem().reminders || []), { at, text: a.text || "Напоминание" }] });
+      return `⏰ Напомню ${new Date(at).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}: ${a.text || ""}`;
+    }
+  } catch (e) { return `✗ Не вышло (${a.op}): ${e.message || e}`; }
+  return "";
+}
+
+// reminders set from the chat; they ring even in quiet hours, a missed one rings on the next start
+function reminders() {
+  const now = Date.now(), list = mem().reminders || [];
+  const due = list.filter(r => r.at <= now);
+  if (!due.length || bubble?.kind === "remind") return false;
+  const r = due[0];
+  remember({ reminders: list.filter(x => x !== list.find(y => y.at === r.at && y.text === r.text)) });
+  const late = now - r.at > 10 * 60e3 ? ` (было на ${hm(new Date(r.at))})` : "";
+  beep(2);
+  ask({
+    kind: "remind", needsAnswer: true, text: "⏰ " + r.text + late,
+    buttons: [
+      { label: "Ок ✓", cls: "ok", fn: close },
+      { label: "Через 10 мин", fn: () => { remember({ reminders: [...(mem().reminders || []), { at: Date.now() + 10 * 60e3, text: r.text }] }); close(); } },
+    ],
+  });
+  return true;
 }
 
 // ---------- updates ----------

@@ -23,12 +23,39 @@ export async function login(email, password) {
 }
 export async function logout() { await sb.auth.signOut(); me = null; }
 
-let all = [], prefs = {};
+let all = [], prefs = {}, cats = [];
 export async function load() {
-  const { data } = chk(await sb.from("docs").select("coll,id,data,owner").in("coll", ["tasks", "prefs"]));
-  all = data.filter(r => r.coll === "tasks").map(r => ({ ...r.data, id: r.id, _owner: r.owner }));
+  const { data } = chk(await sb.from("docs").select("coll,id,data,owner").in("coll", ["tasks", "prefs", "projects", "boards", "cats"]));
+  const of = c => data.filter(r => r.coll === c).map(r => ({ ...r.data, id: r.id, _owner: r.owner }));
+  all = of("tasks");
   prefs = data.find(r => r.coll === "prefs" && r.id === me + ":prefs")?.data || {};
+  // categories with a readable path, for "where to put a new task"
+  const projects = of("projects"), boards = of("boards"), ord = (a, b) => (a.order ?? 999) - (b.order ?? 999);
+  cats = [];
+  for (const p of projects.sort(ord)) for (const b of boards.filter(x => x.project === p.id).sort(ord))
+    for (const c of of("cats").filter(x => x.board === b.id).sort(ord)) cats.push({ id: c.id, label: [p.name || "Без названия", b.name, c.name].filter(Boolean).join(" · ") });
   return all;
+}
+export const catList = () => cats;
+// default home for new tasks: where the focus tasks live, else the first category
+export const defaultCat = () => focusOpen()[0]?.cat || cats[0]?.id;
+
+export async function addTask(text, { cat, due, time, focus } = {}) {
+  cat = cats.some(c => c.id === cat) ? cat : defaultCat();
+  if (!cat) throw new Error("в Tasks нет ни одной категории");
+  const data = { text, cat, order: Math.max(0, ...all.filter(t => t.cat === cat && !t.parent).map(t => t.order || 0)) + 1, done: false };
+  if (due) data.due = due;
+  if (due && time) data.time = time;
+  if (focus) data.focus = Math.max(0, ...focusAll().map(x => x.focus)) + 1;
+  const id = rid();
+  chk(await sb.from("docs").insert({ coll: "tasks", id, data }));
+  const t = { ...data, id, _owner: me };
+  all.push(t);
+  return t;
+}
+export async function unFocus(t) {
+  chk(await sb.rpc("merge_doc", { c: "tasks", i: t.id, f: { focus: null } }));
+  t.focus = null;
 }
 
 // Фокус from Tasks: tasks with a numeric `focus` (their place in the list); the sprint is prefs.sprint
