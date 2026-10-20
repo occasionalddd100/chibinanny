@@ -430,7 +430,7 @@ function openChat() {
           // numbered tasks the model may act on: the focus first, then the rest by urgency
           const fl = db.focusOpen(), rest = db.open().filter(t => !fl.includes(t));
           const list = [...fl, ...rest].slice(0, 30);
-          const cats = db.catList().slice(0, 40);
+          const cats = db.catList().slice(0, 200);
           const d = new Date(), pad = n => String(n).padStart(2, "0");
           const ctx = {
             now: d.toLocaleString("ru-RU", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }),
@@ -463,6 +463,19 @@ async function act(a, list, cats) {
       const t = await db.addTask(a.text, { cat, due: a.due, time: a.time, focus: a.focus });
       const where = db.catList().find(c => c.id === t.cat)?.label || "";
       return `✓ Задача «${short(t.text, 50)}»` + (t.due ? ` на ${t.due}${t.time ? " " + t.time : ""}` : "") + (t.focus ? ", в фокусе" : "") + (where ? ` → ${where}` : "");
+    }
+    if (a.op === "move") {
+      const t = pick(), cat = cats[+String(a.where || "").slice(1) - 1]?.id;
+      await db.move(t, cat);
+      return `✓ Перенёс «${short(t.text, 40)}» → ${db.catList().find(c => c.id === cat)?.label}`;
+    }
+    if (a.op === "edit") {
+      const t = pick(), f = {};
+      for (const k of ["text", "due", "time"]) if (typeof a[k] === "string") f[k] = a[k];
+      if (f.due === "") f.time = "";
+      if (!Object.keys(f).length) throw new Error("нечего менять");
+      await db.edit(t, f);
+      return `✓ Изменил «${short(t.text, 40)}»` + (t.due ? `: ${t.due}${t.time ? " " + t.time : ""}` : "");
     }
     if (a.op === "done") { const t = pick(); await db.done(t); setAnim("happy"); return `✓ Сделано: «${short(t.text, 50)}»`; }
     if (a.op === "focus") { const t = pick(); await db.toFocus(t); return `✓ В фокус: «${short(t.text, 50)}»`; }
@@ -512,6 +525,9 @@ async function checkUpdate(manual) {
 async function settings() {
   const auto = await win.autostart().catch(() => false);
   const ver = await win.version().catch(() => "?");
+  await db.load().catch(() => {});
+  const home = h("select", { name: "homeCat" }, h("option", { value: "" }, "туда же, где фокус"), db.catList().map(c => h("option", { value: c.id }, c.label)));
+  home.value = S.homeCat || "";
   const field = (label, el) => h("label", { cls: "field" }, h("span", {}, label), el);
   const sel = (name, opts) => { const s = h("select", { name }, opts.map(([v, l]) => h("option", { value: v }, l))); s.value = S[name]; return s; };
   const inp = (name, type = "text", ph = "") => h("input", { name, type, placeholder: ph, value: S[name] });
@@ -526,6 +542,7 @@ async function settings() {
     field("Тишина с", inp("quietFrom", "time")),
     field("Тишина до", inp("quietTo", "time")),
     field("Итог дня в", inp("eveningAt", "time")),
+    field("Новые задачи в", home),
     field("Автозапуск", h("input", { name: "auto", type: "checkbox", checked: auto })),
     field("LLM адрес", inp("llmUrl")),
     field("Ключ", inp("llmKey", "password", "sk-or-…")),
@@ -543,7 +560,7 @@ async function settings() {
     const f = Object.fromEntries(new FormData(form));
     for (const k of ["focusMin", "breakMin", "nagMin"]) f[k] = Math.max(1, +f[k] || S[k]);
     const on = !!form.auto.checked; delete f.auto;
-    Object.assign(S, f); saveSettings(S);
+    Object.assign(S, f); saveSettings(S); db.setHomeCat(S.homeCat);
     if (on !== auto) await win.autostart(on).catch(() => {});
     sayLine("Сохранил.", 2000);
   };
@@ -577,6 +594,7 @@ function started() {
 // ---------- boot ----------
 (async () => {
   let bootErr = null;
+  db.setHomeCat(S.homeCat);
   try { await win.init(); area = await win.area(); } catch (e) { bootErr = e; }
   pet.x = area.right - 160;
   setInterval(async () => { try { area = await win.area(); } catch {} }, 30000);

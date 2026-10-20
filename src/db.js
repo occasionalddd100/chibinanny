@@ -38,7 +38,13 @@ export async function load() {
 }
 export const catList = () => cats;
 // default home for new tasks: where the focus tasks live, else the first category
-export const defaultCat = () => focusOpen()[0]?.cat || cats[0]?.id;
+export let homeCat = "";
+export const setHomeCat = id => { homeCat = id || ""; };
+export const defaultCat = () => (cats.some(c => c.id === homeCat) && homeCat) || focusOpen()[0]?.cat || cats[0]?.id;
+export async function edit(t, f) {
+  chk(await sb.rpc("merge_doc", { c: "tasks", i: t.id, f }));
+  Object.assign(t, f);
+}
 
 export async function addTask(text, { cat, due, time, focus } = {}) {
   cat = cats.some(c => c.id === cat) ? cat : defaultCat();
@@ -52,6 +58,14 @@ export async function addTask(text, { cat, due, time, focus } = {}) {
   const t = { ...data, id, _owner: me };
   all.push(t);
   return t;
+}
+export async function move(t, cat) {
+  if (!cats.some(c => c.id === cat)) throw new Error("нет такой категории");
+  const order = Math.max(0, ...all.filter(x => x.cat === cat && !x.parent).map(x => x.order || 0)) + 1;
+  // subtasks follow their parent
+  const kids = all.filter(x => x.parent === t.id);
+  await Promise.all([t, ...kids].map(x => sb.rpc("merge_doc", { c: "tasks", i: x.id, f: x === t ? { cat, order } : { cat } }).then(chk)));
+  t.cat = cat; kids.forEach(k => (k.cat = cat));
 }
 export async function unFocus(t) {
   chk(await sb.rpc("merge_doc", { c: "tasks", i: t.id, f: { focus: null } }));
