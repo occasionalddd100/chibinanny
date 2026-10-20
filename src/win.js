@@ -1,0 +1,41 @@
+// Thin layer over the Tauri window. In a plain browser (preview, tests) every call is a no-op
+// and the "screen" is the browser viewport, so the pet can be tried without building the app.
+export const native = !!window.__TAURI_INTERNALS__;
+
+let T = null;
+export async function init() {
+  if (!native) return;
+  T = await import("@tauri-apps/api/window");
+  const ev = await import("@tauri-apps/api/event");
+  T.listen = ev.listen;
+}
+
+// work area of the monitor in logical px (screen minus the taskbar)
+export async function area() {
+  if (!native) return { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+  const m = (await T.currentMonitor()) || (await T.primaryMonitor());
+  const s = m.scaleFactor, a = m.workArea || { position: m.position, size: m.size };
+  return { left: a.position.x / s, top: a.position.y / s, right: (a.position.x + a.size.width) / s, bottom: (a.position.y + a.size.height) / s };
+}
+
+let last = { x: NaN, y: NaN, w: NaN, h: NaN };
+export function place(x, y, w, h) {
+  x = Math.round(x); y = Math.round(y); w = Math.round(w); h = Math.round(h);
+  if (!native) return;
+  const win = T.getCurrentWindow();
+  if (w !== last.w || h !== last.h) win.setSize(new T.LogicalSize(w, h));
+  if (x !== last.x || y !== last.y) win.setPosition(new T.LogicalPosition(x, y));
+  last = { x, y, w, h };
+}
+
+export const show = () => native && T.getCurrentWindow().show();
+export const focus = () => native && T.getCurrentWindow().setFocus();
+export const onCall = f => native && T.listen("call", f);
+
+export async function autostart(on) {
+  if (!native) return false;
+  const a = await import("@tauri-apps/plugin-autostart");
+  if (on === undefined) return a.isEnabled();
+  await (on ? a.enable() : a.disable());
+  return on;
+}
