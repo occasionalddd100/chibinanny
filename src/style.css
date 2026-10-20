@@ -24,7 +24,7 @@ html, body { margin: 0; background: transparent; overflow: hidden; user-select: 
   border-right: 2px solid var(--line); border-bottom: 2px solid var(--line); transform: rotate(45deg); }
 #bubble.pop { animation: pop .32s cubic-bezier(.3,1.6,.5,1); }
 @keyframes pop { from { transform: scale(.4); opacity: 0 } to { transform: scale(1); opacity: 1 } }
-.say { font-size: 14px; font-weight: 500; }
+.say { font-size: 14px; font-weight: 500; white-space: pre-line; }
 .say:empty { display: none; }
 .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 button { font: inherit; font-size: 13px; border: 0; border-radius: 10px; padding: 6px 10px; background: var(--accent); color: #fff; cursor: pointer; transition: transform .12s, filter .12s; }

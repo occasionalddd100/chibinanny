@@ -260,24 +260,40 @@ function taskButton(t, min) {
 async function pick({ morning = false, min } = {}) {
   lastAsk = Date.now();
   try { await db.load(); } catch (e) { return sayLine("Не достучался до задач: " + (e.message || e), 8000); }
-  const list = db.open();
   const soft = softDay();
   min ??= soft ? 10 : S.focusMin;
-  if (!list.length) return sayLine("Открытых задач нет. Добавь в Tasks или отдыхай 🙂", 8000);
+  const opener = say(S.tone, morning && !soft ? "morning" : "pick", {}, soft);
+  const list = db.focusOpen();
+  // the sprint from «Фокус» in Tasks, top to bottom
+  if (list.length) {
+    const t = list[0], all = db.focusAll().length;
+    const head = db.sprint() ? `Спринт: ${all - list.length} из ${all}.` : `В фокусе ${list.length}.`;
+    return ask({
+      kind: "pick", needsAnswer: true, text: `${opener}\n${head} Дальше: «${short(t.text, 70)}»`,
+      buttons: [
+        { label: `▶ ${min} мин`, cls: "ok", fn: () => startFocus(t, min) },
+        { label: "5 мин", fn: () => startFocus(t, 5) },
+        { label: "Уже сделал ✓", fn: () => finish(t, "next") },
+        ...(list.length > 1 ? [{ label: "Другая…", cls: "ghost", fn: () => more(list.slice(1), min) }] : []),
+        { label: "Не сейчас", cls: "ghost", fn: snooze },
+      ],
+    });
+  }
+  // empty focus: ask to build a sprint, offer what is burning
+  const hot = db.burning().slice(0, 3);
   ask({
     kind: "pick", needsAnswer: true,
-    text: say(S.tone, morning && !soft ? "morning" : "pick", {}, soft),
+    text: "Фокус пуст. Накидай задач в Tasks → «Фокус» и погнали." + (hot.length ? "\nИли закинь горящее:" : ""),
     buttons: [
-      ...list.slice(0, 3).map(t => taskButton(t, min)),
-      ...(list.length > 3 ? [{ label: "Другая…", cls: "ghost", fn: () => more(list, min) }] : []),
+      ...hot.map(t => ({ label: "＋ " + short(t.text), cls: "task", title: t.text, fn: async () => { try { await db.toFocus(t); } catch {} pick({ min }); } })),
       { label: "Не сейчас", cls: "ghost", fn: snooze },
     ],
   });
 }
 function more(list, min) {
   ask({
-    kind: "pick", needsAnswer: true, text: "Вот ещё:",
-    buttons: [...list.slice(3, 11).map(t => taskButton(t, min)), { label: "Не сейчас", cls: "ghost", fn: snooze }],
+    kind: "pick", needsAnswer: true, text: "Какую?",
+    buttons: [...list.slice(0, 8).map(t => taskButton(t, min)), { label: "Не сейчас", cls: "ghost", fn: snooze }],
   });
 }
 function snooze() {
@@ -287,6 +303,7 @@ function snooze() {
 }
 
 function startFocus(t, min = S.focusMin) {
+  if (!db.sprint() && typeof t.focus === "number") db.startSprint().catch(() => {});
   focus = { id: t.id, text: t.text, min, endsAt: Date.now() + min * 60e3 };
   remember({ focus, excuses: 0 });
   setMode("focus"); pet.move = "idle";
@@ -299,7 +316,7 @@ function checkin() {
   ask({
     kind: "check", needsAnswer: true, text: say(S.tone, "check", { t: short(t.text, 60) }),
     buttons: [
-      { label: "Сделал ✓", cls: "ok", fn: () => finish(t) },
+      { label: "Сделал ✓", cls: "ok", fn: () => finish(t, focus.min >= 15 ? "break" : "next") },
       { label: `Ещё ${focus.min} мин`, fn: () => startFocus(t, focus.min) },
       { label: "Застрял", fn: () => stuck(t) },
       { label: "Перерыв", cls: "ghost", fn: () => takeBreak() },
@@ -307,7 +324,8 @@ function checkin() {
   });
 }
 
-async function finish(t) {
+// after: "break" after a long session, "next" goes straight to the next focus task
+async function finish(t, after = "break") {
   const task = db.byId(t.id) || t;
   try { await db.done(task); } catch (e) { return sayLine("Не отметилось: " + (e.message || e), 8000); }
   const m = mem(), yest = new Date(Date.now() - 864e5).toLocaleDateString("sv-SE");
@@ -315,8 +333,15 @@ async function finish(t) {
   remember({ streak, lastDoneDay: db.today(), focus: null });
   focus = null;
   setAnim("happy"); pet.move = "idle";
-  sayLine(say(S.tone, "done") + (streak > 1 ? ` Серия: ${streak} дн. подряд.` : ""), 5000);
-  takeBreak(true);
+  const wasFocus = typeof task.focus === "number";
+  if (wasFocus && !db.focusOpen().length) {
+    const n = await db.finishSprint().catch(() => 0);
+    sayLine(`Спринт закрыт! Сделано: ${n} 🎉` + (streak > 1 ? ` Серия: ${streak} дн.` : ""), 9000);
+    return takeBreak(true);
+  }
+  sayLine(say(S.tone, "done") + (streak > 1 ? ` Серия: ${streak} дн. подряд.` : ""), after === "next" ? 2500 : 5000);
+  if (after === "next") { setMode("idle"); setTimeout(() => !bubble && pick(), 2600); }
+  else takeBreak(true);
 }
 function takeBreak(quietly = false) {
   focus = null; remember({ focus: null });
@@ -355,7 +380,7 @@ function petClick() {
   const b = [];
   if (mode === "focus") {
     const t = { id: focus.id, text: focus.text };
-    b.push({ label: "Сделал ✓", cls: "ok", fn: () => finish(t) }, { label: "Застрял", fn: () => stuck(t) },
+    b.push({ label: "Сделал ✓", cls: "ok", fn: () => finish(t, "next") }, { label: "Застрял", fn: () => stuck(t) },
       { label: "Бросить", cls: "ghost", fn: () => { focus = null; remember({ focus: null }); setMode("idle"); close(); } });
   } else b.push({ label: "Взять задачу", cls: "ok", fn: () => pick() });
   b.push({ label: "Поговорить", fn: openChat }, { label: "Мне тяжело", fn: heavy });

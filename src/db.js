@@ -23,11 +23,37 @@ export async function login(email, password) {
 }
 export async function logout() { await sb.auth.signOut(); me = null; }
 
-let all = [];
+let all = [], prefs = {};
 export async function load() {
-  const { data } = chk(await sb.from("docs").select("id,data,owner").eq("coll", "tasks"));
-  all = data.map(r => ({ ...r.data, id: r.id, _owner: r.owner }));
+  const { data } = chk(await sb.from("docs").select("coll,id,data,owner").in("coll", ["tasks", "prefs"]));
+  all = data.filter(r => r.coll === "tasks").map(r => ({ ...r.data, id: r.id, _owner: r.owner }));
+  prefs = data.find(r => r.coll === "prefs" && r.id === me + ":prefs")?.data || {};
   return all;
+}
+
+// Фокус from Tasks: tasks with a numeric `focus` (their place in the list); the sprint is prefs.sprint
+const inFocus = t => typeof t.focus === "number";
+export const focusOpen = () => all.filter(t => inFocus(t) && !t.done).sort((a, b) => a.focus - b.focus);
+export const focusAll = () => all.filter(inFocus);
+export const sprint = () => prefs.sprint || null;
+async function putPrefs(f) {
+  const id = me + ":prefs";
+  const r = await sb.from("docs").insert({ coll: "prefs", id, data: f });
+  if (r.error?.code === "23505") chk(await sb.rpc("merge_doc", { c: "prefs", i: id, f }));
+  else chk(r);
+  prefs = { ...prefs, ...f };
+}
+export const startSprint = () => putPrefs({ sprint: { start: new Date().toISOString() } });
+export async function finishSprint() {
+  const done = focusAll().filter(t => t.done);
+  await Promise.all(done.map(t => sb.rpc("merge_doc", { c: "tasks", i: t.id, f: { focus: null } })));
+  await putPrefs({ sprint: null });
+  return done.length;
+}
+export async function toFocus(t) {
+  const focus = Math.max(0, ...focusAll().map(x => x.focus)) + 1;
+  chk(await sb.rpc("merge_doc", { c: "tasks", i: t.id, f: { focus } }));
+  t.focus = focus;
 }
 export const byId = id => all.find(t => t.id === id);
 
@@ -51,7 +77,7 @@ export function open() {
     .filter(t => !t.done && !t.hidden && t.text?.trim() && mine(t) && !hasOpenKids.has(t.id))
     .sort((a, b) => rank(a) - rank(b) || (a.due || "9").localeCompare(b.due || "9") || (a.order ?? 999) - (b.order ?? 999));
 }
-export const urgentCount = () => open().filter(t => rank(t) <= 3).length;
+export const burning = () => open().filter(t => rank(t) <= 2 && typeof t.focus !== "number");
 export const doneToday = () => all.filter(t => t.done && t.doneOn === today() && (t.doneBy || t._owner) === me);
 
 export async function done(t) {
@@ -63,6 +89,8 @@ export async function done(t) {
 export async function addSub(t, text) {
   const kids = all.filter(x => x.parent === t.id);
   const data = { text, cat: t.cat, parent: t.id, order: Math.max(0, ...kids.map(x => x.order || 0)) + 1, done: false };
+  // a step of a focus task goes into the focus right before it
+  if (inFocus(t)) data.focus = t.focus - 0.5;
   const id = rid();
   chk(await sb.from("docs").insert({ coll: "tasks", id, data }));
   const sub = { ...data, id, _owner: me };
