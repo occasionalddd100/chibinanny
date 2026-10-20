@@ -2,12 +2,12 @@
 // and the "screen" is the browser viewport, so the pet can be tried without building the app.
 export const native = !!window.__TAURI_INTERNALS__;
 
-let T = null;
+// module namespaces are frozen, so the event API lives in its own variable
+let T = null, E = null;
 export async function init() {
   if (!native) return;
   T = await import("@tauri-apps/api/window");
-  const ev = await import("@tauri-apps/api/event");
-  T.listen = ev.listen;
+  E = await import("@tauri-apps/api/event");
 }
 
 // work area of the monitor in logical px (screen minus the taskbar)
@@ -30,7 +30,7 @@ export function place(x, y, w, h) {
 
 export const show = () => native && T.getCurrentWindow().show();
 export const focus = () => native && T.getCurrentWindow().setFocus();
-export const onCall = f => native && T.listen("call", f);
+export const onCall = f => native && E.listen("call", f);
 
 export async function autostart(on) {
   if (!native) return false;
@@ -38,4 +38,16 @@ export async function autostart(on) {
   if (on === undefined) return a.isEnabled();
   await (on ? a.enable() : a.disable());
   return on;
+}
+
+// new release on GitHub: download, install and restart (the NSIS installer runs passively)
+export async function update(onFound) {
+  if (!native) return;
+  const { check } = await import("@tauri-apps/plugin-updater");
+  const u = await check();
+  if (!u) return;
+  onFound?.(u.version);
+  await u.downloadAndInstall();
+  const { relaunch } = await import("@tauri-apps/plugin-process");
+  await relaunch();
 }

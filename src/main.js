@@ -480,18 +480,22 @@ function started() {
 
 // ---------- boot ----------
 (async () => {
-  await win.init();
-  area = await win.area();
+  let bootErr = null;
+  try { await win.init(); area = await win.area(); } catch (e) { bootErr = e; }
   pet.x = area.right - 160;
   setInterval(async () => { try { area = await win.area(); } catch {} }, 30000);
   let last = performance.now();
-  const loop = t => { frame(Math.min(0.05, (t - last) / 1000)); last = t; requestAnimationFrame(loop); };
+  const loop = t => { try { frame(Math.min(0.05, (t - last) / 1000)); } catch (e) { console.error(e); } last = t; requestAnimationFrame(loop); };
   requestAnimationFrame(loop);
   layout(); await win.show();
+  if (bootErr) sayLine("Что-то сломалось на старте: " + (bootErr.message || bootErr), 20000);
   win.onCall(() => { if (summoned) return; pet.x = (area.left + area.right) / 2; pet.air = 300; pet.move = "fall"; petClick(); });
   setInterval(tick, 5000);
   if (await db.session().catch(() => null)) started();
   else setTimeout(showLogin, 800);
+  // updates from GitHub Releases: at start and every 6 hours, never in the middle of a focus session
+  const upd = () => mode !== "focus" && win.update(v => sayLine(`Нашёл обновление ${v}, ставлю и перезапускаюсь…`, 10000)).catch(e => console.warn("update", e));
+  setTimeout(upd, 15000); setInterval(upd, 6 * 3600e3);
 })();
 
 // for the browser preview and tests
