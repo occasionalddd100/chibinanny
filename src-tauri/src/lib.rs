@@ -12,6 +12,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // tray: the pet has no taskbar button, so this is the way to find it or quit
             let call = MenuItem::with_id(app, "call", "Позвать Пшика", true, None::<&str>)?;

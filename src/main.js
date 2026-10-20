@@ -3,6 +3,7 @@ import * as win from "./win.js";
 import * as db from "./db.js";
 import { say, loadSettings, saveSettings, mem, remember } from "./talk.js";
 import { chat, freeModels } from "./llm.js";
+import { plan } from "./plan.js";
 
 const S = loadSettings();
 const PET = () => 150 * (+S.size || 1), BUB_W = 300, PILL = 28;
@@ -232,10 +233,11 @@ function quiet(d = new Date()) {
   return a <= b ? t >= a && t < b : t >= a || t < b;
 }
 
-function tick() {
+async function tick() {
   renderPill();
   if (mode === "login") return;
   if (reminders()) return;
+  if (await taskReminders()) return;
   const now = Date.now(), d = new Date();
   const asleep = now < pausedUntil || (quiet(d) && mode !== "focus");
   if (asleep) { if (mode !== "sleep" && mode !== "focus") { setMode("sleep"); if (bubble?.needsAnswer) close(); } return; }
@@ -488,6 +490,30 @@ async function act(a, list, cats) {
     }
   } catch (e) { return `✗ Не вышло (${a.op}): ${e.message || e}`; }
   return "";
+}
+
+// smart reminders from Tasks (same plan as the phone): the evening before, the morning of, an hour before, at the time.
+// A Windows toast for each; Пшик also says the close ones. Tasks are re-read every 5 minutes.
+let planned = [], plannedAt = 0;
+async function taskReminders() {
+  const now = Date.now();
+  if (now - plannedAt > 5 * 60e3) {
+    plannedAt = now;
+    try { await db.load(); planned = plan(db.snapshot(), now - 15 * 60e3); } catch { return false; }
+  }
+  const fired = mem().fired || {};
+  const due = planned.filter(x => x.at.getTime() <= now && !fired[x.key]);
+  if (!due.length) return false;
+  for (const x of due) fired[x.key] = x.at.getTime();
+  // forget keys older than two days
+  for (const k of Object.keys(fired)) if (fired[k] < now - 2 * 864e5) delete fired[k];
+  remember({ fired });
+  for (const x of due) win.notify(x.title, x.body).catch(() => {});
+  const x = due[due.length - 1];
+  if (bubble?.needsAnswer) return true;
+  beep(x.key.startsWith("now:") ? 2 : 1);
+  ask({ kind: "say", text: "🔔 " + x.title + (x.body && !x.key.startsWith("now:") ? "\n" + x.body : ""), autoClose: 30000, buttons: [{ label: "Ок", cls: "ghost", fn: close }] });
+  return true;
 }
 
 // reminders set from the chat; they ring even in quiet hours, a missed one rings on the next start

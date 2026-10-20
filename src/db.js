@@ -37,6 +37,7 @@ export async function load() {
   return all;
 }
 export const catList = () => cats;
+export const snapshot = () => ({ tasks: all, cats: [], boards: [], me });
 // default home for new tasks: where the focus tasks live, else the first category
 export let homeCat = "";
 export const setHomeCat = id => { homeCat = id || ""; };

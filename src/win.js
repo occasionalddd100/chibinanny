@@ -55,3 +55,11 @@ export async function update(onFound) {
   const { relaunch } = await import("@tauri-apps/plugin-process");
   await relaunch();
 }
+
+// Windows toast (in a plain browser: the web Notification, if allowed)
+export async function notify(title, body) {
+  if (!native) { if (window.Notification?.permission === "granted") new Notification(title, { body }); return; }
+  const n = await import("@tauri-apps/plugin-notification");
+  if (!(await n.isPermissionGranted()) && (await n.requestPermission()) !== "granted") return;
+  n.sendNotification({ title, body });
+}
