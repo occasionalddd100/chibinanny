@@ -41,11 +41,15 @@ export async function autostart(on) {
 }
 
 // new release on GitHub: download, install and restart (the NSIS installer runs passively)
+export async function version() {
+  if (!native) return "dev";
+  return (await import("@tauri-apps/api/app")).getVersion();
+}
 export async function update(onFound) {
-  if (!native) return;
+  if (!native) return false;
   const { check } = await import("@tauri-apps/plugin-updater");
   const u = await check();
-  if (!u) return;
+  if (!u) return false;
   onFound?.(u.version);
   await u.downloadAndInstall();
   const { relaunch } = await import("@tauri-apps/plugin-process");

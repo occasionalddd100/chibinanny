@@ -439,9 +439,22 @@ function openChat() {
   if (!chatLog.length) bubEl.querySelector(".say").textContent = "Слушаю. О чём?";
 }
 
+// ---------- updates ----------
+// quiet when automatic; a manual check says what happened, errors included
+async function checkUpdate(manual) {
+  try {
+    const found = await win.update(v => sayLine(`Нашёл обновление ${v}, ставлю и перезапускаюсь…`, 20000));
+    if (manual && !found) sayLine(`Стоит последняя версия (${await win.version()}).`, 5000);
+  } catch (e) {
+    console.warn("update", e);
+    if (manual) sayLine("Не получилось обновиться: " + (e?.message || e), 15000);
+  }
+}
+
 // ---------- settings ----------
 async function settings() {
   const auto = await win.autostart().catch(() => false);
+  const ver = await win.version().catch(() => "?");
   const field = (label, el) => h("label", { cls: "field" }, h("span", {}, label), el);
   const sel = (name, opts) => { const s = h("select", { name }, opts.map(([v, l]) => h("option", { value: v }, l))); s.value = S[name]; return s; };
   const inp = (name, type = "text", ph = "") => h("input", { name, type, placeholder: ph, value: S[name] });
@@ -466,6 +479,7 @@ async function settings() {
         catch (e) { model.placeholder = "не загрузилось: " + e.message; }
       } }, "Бесплатные модели"),
       h("button", { cls: "ok" }, "Сохранить"),
+      h("button", { type: "button", cls: "ghost", onclick: () => { sayLine("Проверяю обновления…", 15000); checkUpdate(true); } }, `Обновления (v${ver})`),
       h("button", { type: "button", cls: "ghost", onclick: async () => { await db.logout(); setMode("login"); showLogin(); } }, "Выйти из аккаунта")));
   form.onsubmit = async e => {
     e.preventDefault();
@@ -519,8 +533,8 @@ function started() {
   if (await db.session().catch(() => null)) started();
   else setTimeout(showLogin, 800);
   // updates from GitHub Releases: at start and every 6 hours, never in the middle of a focus session
-  const upd = () => mode !== "focus" && win.update(v => sayLine(`Нашёл обновление ${v}, ставлю и перезапускаюсь…`, 10000)).catch(e => console.warn("update", e));
-  setTimeout(upd, 15000); setInterval(upd, 6 * 3600e3);
+  setTimeout(() => checkUpdate(false), 15000);
+  setInterval(() => mode !== "focus" && checkUpdate(false), 6 * 3600e3);
 })();
 
 // for the browser preview and tests
